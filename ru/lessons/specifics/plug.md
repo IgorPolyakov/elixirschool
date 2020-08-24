@@ -1,22 +1,25 @@
 ---
-version: 1.2.0
+version: 2.2.0
 title: Plug
 ---
 
-Если вы знакомы с `Ruby`, то можете думать о `Plug` как о комбинации `Rack` и `Sinatra`. Это набор договорённостей и спецификаций для модулей, используемых в веб-приложениях, а также адаптеры соединений для различных веб-серверов. Хотя `Plug` и не является частью ядра `Elixir`, это официальный проект от той же команды.
+Если вы знакомы с `Ruby`, то можете думать о `Plug` как о комбинации `Rack` и `Sinatra`.
+Это набор договорённостей и спецификаций для модулей, используемых в веб-приложениях, а также адаптеры соединений для различных веб-серверов.
+Хотя `Plug` и не является частью ядра `Elixir`, это официальный проект от той же команды.
 
-Мы начнем с создания минимального рабочего веб-приложения с использованием `Plug`. После этого мы познакомимся с роутерами и узнаем, как добавить `Plug` к уже существующему приложению.
+Мы начнем с создания минимального рабочего веб-приложения с использованием `Plug`.
+После этого мы познакомимся с роутерами и узнаем, как добавить `Plug` к уже существующему приложению.
 
 {% include toc.html %}
 
 ## Перед установкой
 
-Чтобы следовать инструкциям этого урока, вам понадобятся установленный Elixir версии 1.4 или выше и `mix`.
+Чтобы следовать инструкциям этого урока, вам понадобятся установленный Elixir версии 1.5 или выше и `mix`.
 
 Если у вас еще нет проекта, создайте его:
 
 ```shell
-$ mix new example
+$ mix new example --sup
 $ cd example
 ```
 
@@ -26,10 +29,9 @@ $ cd example
 Для начала добавим в него сам `Plug`, а также веб-сервер (мы будет использовать `Cowboy`).
 
 ```elixir
-defp deps do
+def deps do
   [
-    {:cowboy, "~> 1.1.2"},
-    {:plug, "~> 1.3.4"}
+    {:plug_cowboy, "~> 2.0"},
   ]
 end
 ```
@@ -75,18 +77,19 @@ end
 Добавим в `lib/example.ex` старт веб-сервера `Cowboy`:
 
 ```elixir
-defmodule Example do
+defmodule Example.Application do
   use Application
   require Logger
 
   def start(_type, _args) do
     children = [
-      Plug.Adapters.Cowboy.child_spec(:http, Example.HelloWorldPlug, [], port: 8080)
+      {Plug.Cowboy, scheme: :http, plug: Example.HelloWorldPlug, options: [port: 8080]}
     ]
+    opts = [strategy: :one_for_one, name: Example.Supervisor]
 
-    Logger.info("Started application")
+    Logger.info("Starting application...")
 
-    Supervisor.start_link(children, strategy: :one_for_one)
+    Supervisor.start_link(children, opts)
   end
 end
 ```
@@ -104,7 +107,7 @@ end
 def application do
   [
     extra_applications: [:logger],
-    mod: {Example, []}
+    mod: {Example.Application, []}
   ]
 end
 ```
@@ -132,11 +135,16 @@ Hello World!
 defmodule Example.Router do
   use Plug.Router
 
-  plug(:match)
-  plug(:dispatch)
+  plug :match
+  plug :dispatch
 
-  get("/", do: send_resp(conn, 200, "Welcome"))
-  match(_, do: send_resp(conn, 404, "Oops!"))
+  get "/" do
+    send_resp(conn, 200, "Welcome")
+  end
+
+  match _ do
+    send_resp(conn, 404, "Oops!")
+  end
 end
 ```
 
@@ -149,11 +157,13 @@ end
 ```elixir
 def start(_type, _args) do
   children = [
-    Plug.Adapters.Cowboy.child_spec(:http, Example.Router, [], port: 8080)
+    {Plug.Cowboy, scheme: :http, plug: Example.Router, options: [port: 8080]}
   ]
+  opts = [strategy: :one_for_one, name: Example.Supervisor]
 
-  Logger.info("Started application")
-  Supervisor.start_link(children, strategy: :one_for_one)
+  Logger.info("Starting application...")
+
+  Supervisor.start_link(children, opts)
 end
 ```
 
@@ -181,19 +191,19 @@ defmodule Example.Plug.VerifyRequest do
     Если у запроса отсутствует один из требуемых параметров - возникает исключение.
     """
 
-    defexception message: "", plug_status: 400
+    defexception message: ""
   end
 
   def init(options), do: options
 
   def call(%Plug.Conn{request_path: path} = conn, opts) do
-    if path in opts[:paths], do: verify_request!(conn.body_params, opts[:fields])
+    if path in opts[:paths], do: verify_request!(conn.params, opts[:fields])
     conn
   end
 
-  defp verify_request!(body_params, fields) do
+  defp verify_request!(params, fields) do
     verified =
-      body_params
+      params
       |> Map.keys()
       |> contains_fields?(fields)
 
@@ -261,18 +271,22 @@ end
 Далее необходимо добавить в файл `lib/example.ex` чтение номера порта из настроек и передачу его в `Cowboy`:
 
 ```elixir
-defmodule Example do
+defmodule Example.Application do
   use Application
+  require Logger
 
   def start(_type, _args) do
-    port = Application.get_env(:example, :cowboy_port, 8080)
-
     children = [
-      Plug.Adapters.Cowboy.child_spec(:http, Example.Router, [], port: port)
+      {Plug.Cowboy, scheme: :http, plug: Example.Router, options: [port: cowboy_port()]}
     ]
+    opts = [strategy: :one_for_one, name: Example.Supervisor]
 
-    Supervisor.start_link(children, strategy: :one_for_one)
+    Logger.info("Starting application...")
+
+    Supervisor.start_link(children, opts)
   end
+
+  defp cowboy_port, do: Application.get_env(:example, :cowboy_port, 8080)
 end
 ```
 
@@ -313,7 +327,8 @@ defmodule Example.RouterTest do
 
   test "returns welcome" do
     conn =
-      conn(:get, "/", "")
+      :get
+      |> conn("/", "")
       |> Router.call(@opts)
 
     assert conn.state == :sent
@@ -322,8 +337,8 @@ defmodule Example.RouterTest do
 
   test "returns uploaded" do
     conn =
-      conn(:post, "/upload", "content=#{@content}&mimetype=#{@mimetype}")
-      |> put_req_header("content-type", "application/x-www-form-urlencoded")
+      :get
+      |> conn("/upload?content=#{@content}&mimetype=#{@mimetype}")
       |> Router.call(@opts)
 
     assert conn.state == :sent
@@ -332,7 +347,8 @@ defmodule Example.RouterTest do
 
   test "returns 404" do
     conn =
-      conn(:get, "/missing", "")
+      :get
+      |> conn("/missing", "")
       |> Router.call(@opts)
 
     assert conn.state == :sent
