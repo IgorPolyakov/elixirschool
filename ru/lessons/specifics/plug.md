@@ -3,12 +3,14 @@ version: 2.2.0
 title: Plug
 ---
 
-Если вы знакомы с `Ruby`, то можете думать о `Plug` как о комбинации `Rack` и `Sinatra`.
-Это набор договорённостей и спецификаций для модулей, используемых в веб-приложениях, а также адаптеры соединений для различных веб-серверов.
-Хотя `Plug` и не является частью ядра `Elixir`, это официальный проект от той же команды.
+Если вы знакомы с Ruby, вы можете думать о Plug как о комбинации Rack и Sinatra.
+Он предоставляет спецификацию для компонентов веб-приложений и адаптеров для веб-серверов.
+Хотя Plug и не является частью ядра Elixir, это официальный проект от той же команды.
 
-Мы начнем с создания минимального рабочего веб-приложения с использованием `Plug`.
-После этого мы познакомимся с роутерами и узнаем, как добавить `Plug` к уже существующему приложению.
+В этом уроке мы создадим простой HTTP-сервер с нуля, используя библиотеку Elixir PlugCowboy.
+Cowboy - это простой HTTP-сервер для Erlang, и Plug предоставит нам адаптер подключения для этого веб-сервера.
+
+После того, как мы настроим наше минимальное рабочее веб-приложение, мы узнаем о маршрутизаторе Plug и о том, как использовать несколько плагинов в одном веб-приложении.
 
 {% include toc.html %}
 
@@ -27,9 +29,10 @@ $ cd example
 
 ## Зависимости
 
-Добавлять новые зависимости при помощи `mix` невероятно легко.
-Чтобы установить `Plug` достаточно сделать пару изменений в файле `mix.exs`.
-Для начала добавим в него сам `Plug`, а также веб-сервер (мы будем использовать `Cowboy`).
+Добавлять новые зависимости при помощи mix невероятно легко.
+Чтобы использовать Plug в качестве интерфейса адаптера для веб-сервера Cowboy2, нам необходимо установить пакет PlugCowboy:
+
+Добавьте в файл `mix.exs` следующее:
 
 ```elixir
 def deps do
@@ -39,7 +42,7 @@ def deps do
 end
 ```
 
-Выполните следующую команду в терминале, чтобы `mix` скачал и установил новые зависимости:
+Выполните следующую команду в терминале, чтобы mix скачал и установил новые зависимости:
 
 ```shell
 $ mix deps.get
@@ -47,10 +50,10 @@ $ mix deps.get
 
 ## Спецификация
 
-Чтобы создавать собственные модули `Plug`, нужно придерживаться спецификации.
+Чтобы создавать собственные Plug модули, нужно придерживаться спецификации.
 К счастью, необходимо реализовать всего две функции: `init/1` и `call/2`.
 
-Вот пример простого модуля `Plug`, который возвращает "Hello World!":
+Вот пример простого Plug модуля, который возвращает "Hello World!":
 
 ```elixir
 defmodule Example.HelloWorldPlug do
@@ -74,8 +77,8 @@ end
 
 Значение, возвращаемое `init/1`, передается в качестве второго аргумента в функцию `call/2`.
 
-Функция `call/2` вызывается для каждого нового запроса, приходящего от веб-сервера &mdash; `Cowboy`.
-Она получает структуру `%Plug.Conn` в качества своего первого аргумента, и ожидается, что она также вернёт соединение (структуру того же типа).
+Функция `call/2` вызывается для каждого нового запроса, приходящего от веб-сервера Cowboy.
+Она получает структуру `%Plug.Conn{}` в качества первого аргумента, и ожидается, что она также вернёт соединение (структуру того типа `%Plug.Conn{}`).
 
 ## Настройка Application-модуля приложения
 
@@ -108,7 +111,6 @@ end
 Нужно сделать так, чтобы наше приложение автоматически запускалось.
 
 Для этого изменим файл следующим образом:
-
 ```elixir
 def application do
   [
@@ -305,12 +307,6 @@ end
 
 > (Необязательно) добавить параметр `:cowboy_port` в файл `config/config.exs`
 
-```elixir
-use Mix.Config
-
-config :example, cowboy_port: 8080
-```
-
 Теперь для запуска приложения можно использовать команду:
 
 ```shell
@@ -374,6 +370,103 @@ end
 $ mix test test/example/router_test.exs
 ```
 
+## Plug.ErrorHandler
+
+We noticed earlier that when we went to <http://127.0.0.1:8080/upload> without the expected parameters, we didn't get a friendly error page or a sensible HTTP status - just our browser's default error page with a `500 Internal Server Error`.
+
+Let's fix that now by adding in [`Plug.ErrorHandler`](https://hexdocs.pm/plug/Plug.ErrorHandler.html).
+
+First, open up `lib/example/router.ex` and then write the following to that file.
+
+```elixir
+defmodule Example.Router do
+  use Plug.Router
+  use Plug.ErrorHandler
+
+  alias Example.Plug.VerifyRequest
+
+  plug Plug.Parsers, parsers: [:urlencoded, :multipart]
+  plug VerifyRequest, fields: ["content", "mimetype"], paths: ["/upload"]
+  plug :match
+  plug :dispatch
+
+  get "/" do
+    send_resp(conn, 200, "Welcome")
+  end
+
+  get "/upload" do
+    send_resp(conn, 201, "Uploaded")
+  end
+
+  match _ do
+    send_resp(conn, 404, "Oops!")
+  end
+
+  defp handle_errors(conn, %{kind: kind, reason: reason, stack: stack}) do
+    IO.inspect(kind, label: :kind)
+    IO.inspect(reason, label: :reason)
+    IO.inspect(stack, label: :stack)
+    send_resp(conn, conn.status, "Something went wrong")
+  end
+end
+```
+
+You'll notice that at the top, we are now adding `use Plug.ErrorHandler`.
+
+This plug catches any error, and then looks for a function `handle_errors/2` to call in order to handle it.
+
+`handle_errors/2` just needs to accept the `conn` as the first argument and then a map with three items (`:kind`, `:reason`, and `:stack`) as the second.
+
+You can see we've defined a very simple `handle_errors/2` function to see what's going on. Let's stop and restart our app again to see how this works!
+
+Now, when you navigate to <http://127.0.0.1:8080/upload>, you'll see a friendly error message.
+
+If you look in your terminal, you'll see something like the following:
+
+```shell
+kind: :error
+reason: %Example.Plug.VerifyRequest.IncompleteRequestError{message: ""}
+stack: [
+  {Example.Plug.VerifyRequest, :verify_request!, 2,
+   [file: 'lib/example/plug/verify_request.ex', line: 23]},
+  {Example.Plug.VerifyRequest, :call, 2,
+   [file: 'lib/example/plug/verify_request.ex', line: 13]},
+  {Example.Router, :plug_builder_call, 2,
+   [file: 'lib/example/router.ex', line: 1]},
+  {Example.Router, :call, 2, [file: 'lib/plug/error_handler.ex', line: 64]},
+  {Plug.Cowboy.Handler, :init, 2,
+   [file: 'lib/plug/cowboy/handler.ex', line: 12]},
+  {:cowboy_handler, :execute, 2,
+   [
+     file: '/path/to/project/example/deps/cowboy/src/cowboy_handler.erl',
+     line: 41
+   ]},
+  {:cowboy_stream_h, :execute, 3,
+   [
+     file: '/path/to/project/example/deps/cowboy/src/cowboy_stream_h.erl',
+     line: 293
+   ]},
+  {:cowboy_stream_h, :request_process, 3,
+   [
+     file: '/path/to/project/example/deps/cowboy/src/cowboy_stream_h.erl',
+     line: 271
+   ]}
+]
+```
+
+At the moment, we're still sending a `500 Internal Server Error` back. We can customise the status code by adding a `:plug_status` field to our exception. Open up `lib/example/plug/verify_request.ex` and add the following:
+
+```elixir
+defmodule IncompleteRequestError do
+  defexception message: "", plug_status: 400
+end
+```
+
+Перезагрузите сервер и обновите страницу, теперь вы получите ответ `400 Bad Request`.
+
+This plug makes it really easy to catch the useful information needed for developers to fix issues, while being able to also give our end user a nice page so it doesn't look like our app totally blew up!
+
 ## Доступные модули Plug
 
-Много модулей `Plug` доступно для использования сразу "из коробки". Полный список можно найти в документации по `Plug` &mdash; [здесь](https://github.com/elixir-lang/plug#available-plugs).
+Много модулей `Plug` доступно для использования сразу "из коробки".
+Полный список можно найти в документации по `Plug` &mdash; [здесь](https://github.com/elixir-lang/plug#available-plugs).
