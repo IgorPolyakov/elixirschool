@@ -53,7 +53,7 @@ $ mix deps.get
 Чтобы создавать собственные Plug модули, нужно придерживаться спецификации.
 К счастью, необходимо реализовать всего две функции: `init/1` и `call/2`.
 
-Вот пример простого Plug модуля, который возвращает "Hello World!":
+Вот пример простого Plug модуля, который возвращает "Привет Мир!":
 
 ```elixir
 defmodule Example.HelloWorldPlug do
@@ -64,7 +64,7 @@ defmodule Example.HelloWorldPlug do
   def call(conn, _opts) do
     conn
     |> put_resp_content_type("text/plain")
-    |> send_resp(200, "Hello World!\n")
+    |> send_resp(200, "Привет Мир!\n")
   end
 end
 ```
@@ -132,7 +132,7 @@ $ mix run --no-halt
 Там должно появиться следующее:
 
 ```
-Hello World!
+Привет Мир!
 ```
 
 ## Использование Plug.Router
@@ -150,11 +150,11 @@ defmodule Example.Router do
   plug :dispatch
 
   get "/" do
-    send_resp(conn, 200, "Welcome")
+    send_resp(conn, 200, "Добро пожаловать")
   end
 
   match _ do
-    send_resp(conn, 404, "Oops!")
+    send_resp(conn, 404, "Ой!")
   end
 end
 ```
@@ -181,9 +181,9 @@ end
 Запустим веб-сервер (в случае, если предыдущий сервер еще работает, его можно остановить, дважды нажав `Ctrl+C`).
 
 Теперь откроем <http://127.0.0.1:8080> в браузере.
-Мы должны увидеть сообщение `Welcome`.
+Мы должны увидеть сообщение `Добро пожаловать`.
 Попробуем открыть <http://127.0.0.1:8080/waldo> или любой другой ресурс.
-Должна появиться 404 ошибка с текстом `Oops!`.
+Должна появиться 404 ошибка с текстом `Ой!`.
 
 ## Создание еще одного модуля Plug
 
@@ -249,38 +249,52 @@ defmodule Example.Router do
   plug :dispatch
 
   get "/" do
-    send_resp(conn, 200, "Welcome")
+    send_resp(conn, 200, "Добро пожаловать")
   end
 
   get "/upload" do
-    send_resp(conn, 201, "Uploaded")
+    send_resp(conn, 201, "Загружено")
   end
 
   match _ do
-    send_resp(conn, 404, "Oops!")
+    send_resp(conn, 404, "Ой!")
   end
 end
 ```
 
-## Делаем HTTP порт конфигурируемым
-
-Когда мы создавали наше приложение, HTTP порт был "зашит" в коде.
-Считается хорошим тоном делать порт конфигурируемым при помощи файлов настроек.
-
-Начнём с изменения блока `application` в файле `mix.exs` для того, чтобы предоставить среде `Elixir` информацию о нашем приложении и установить для приложения переменную среды `env`. Отредактированный код данного блока будет выглядеть следующим образом:
+With this code, we are telling our application to send incoming requests through the `VerifyRequest` plug _before_ running through the code in the router.
+Via the function call:
 
 ```elixir
-def application do
-  [
-    extra_applications: [:logger],
-    mod: {Example, []},
-    env: [cowboy_port: 8080]
-  ]
-end
+plug VerifyRequest, fields: ["content", "mimetype"], paths: ["/upload"]
 ```
+We automatically invoke `VerifyRequest.init(fields: ["content", "mimetype"], paths: ["/upload"])`.
+This in turn passes the given options to the `VerifyRequest.call(conn, opts)` function.
+
+Let's take a look at this plug in action! Go ahead and crash your local server (remember, that's done by pressing `ctrl + c` twice).
+Then restart the server (`mix run --no-halt`).
+Now go to <http://127.0.0.1:8080/upload> in your browser and you'll see that the page simply isn't working. You'll just see a default error page provided by your browser.
+
+Now let's add our required params by going to <http://127.0.0.1:8080/upload?content=thing1&mimetype=thing2>. Now we should see our 'Uploaded' message.
+
+It's not great that when we raise an error, we don't get _any_ page. We'll look at how to handle errors with plugs later.
+
+## Делаем HTTP порт конфигурируемым
+
+Когда мы создавали наше приложение `Example`, HTTP порт был "зашит" в коде.
+Считается хорошим тоном делать порт конфигурируемым при помощи файлов настроек.
+
+Мы установим переменную среды приложения в `config/config.exs`
+
+```elixir
+use Mix.Config
+
+config :example, cowboy_port: 8080
+```
+Затем нам нужно обновить `lib/example/application.ex`, прочитать значение конфигурации порта и передать его Cowboy.
+Мы определим частную функцию, чтобы завершить эту ответственность.
 
 Непосредственно нашего приложения касается строка `mod: {Example, []}`. Обратите внимание, что мы также запускаем приложения `cowboy`, `logger` и `plug`.
-
 Далее необходимо добавить в файл `lib/example.ex` чтение номера порта из настроек и передачу его в `Cowboy`:
 
 ```elixir
@@ -305,8 +319,6 @@ end
 
 Третий аргумент в `Application.get_env` &mdash; это порт по умолчанию на случай, если настройка не объявлена.
 
-> (Необязательно) добавить параметр `:cowboy_port` в файл `config/config.exs`
-
 Теперь для запуска приложения можно использовать команду:
 
 ```shell
@@ -327,12 +339,12 @@ defmodule Example.RouterTest do
 
   alias Example.Router
 
-  @content "<html><body>Hi!</body></html>"
+  @content "<html><body>Привет!</body></html>"
   @mimetype "text/html"
 
   @opts Router.init([])
 
-  test "returns welcome" do
+  test "returns Добро пожаловать" do
     conn =
       :get
       |> conn("/", "")
@@ -342,7 +354,7 @@ defmodule Example.RouterTest do
     assert conn.status == 200
   end
 
-  test "returns uploaded" do
+  test "returns Загружено" do
     conn =
       :get
       |> conn("/upload?content=#{@content}&mimetype=#{@mimetype}")
@@ -372,11 +384,11 @@ $ mix test test/example/router_test.exs
 
 ## Plug.ErrorHandler
 
-We noticed earlier that when we went to <http://127.0.0.1:8080/upload> without the expected parameters, we didn't get a friendly error page or a sensible HTTP status - just our browser's default error page with a `500 Internal Server Error`.
+Ранее мы заметили, что когда мы перешли на <http://127.0.0.1:8080/upload> без ожидаемых параметров, мы не получили удобную страницу с ошибкой или разумный статус HTTP - просто страницу с ошибкой c `500 Internal Server Error`.
 
-Let's fix that now by adding in [`Plug.ErrorHandler`](https://hexdocs.pm/plug/Plug.ErrorHandler.html).
+Давайте исправим это сейчас, добавив [`Plug.ErrorHandler`](https://hexdocs.pm/plug/Plug.ErrorHandler.html).
 
-First, open up `lib/example/router.ex` and then write the following to that file.
+Сначала откройте `lib/example/router.ex`, а затем напишите в этот файл следующее.
 
 ```elixir
 defmodule Example.Router do
@@ -391,15 +403,15 @@ defmodule Example.Router do
   plug :dispatch
 
   get "/" do
-    send_resp(conn, 200, "Welcome")
+    send_resp(conn, 200, "Добро пожаловать")
   end
 
   get "/upload" do
-    send_resp(conn, 201, "Uploaded")
+    send_resp(conn, 201, "Загружено")
   end
 
   match _ do
-    send_resp(conn, 404, "Oops!")
+    send_resp(conn, 404, "Ой!")
   end
 
   defp handle_errors(conn, %{kind: kind, reason: reason, stack: stack}) do
@@ -454,7 +466,7 @@ stack: [
 ]
 ```
 
-At the moment, we're still sending a `500 Internal Server Error` back. We can customise the status code by adding a `:plug_status` field to our exception. Open up `lib/example/plug/verify_request.ex` and add the following:
+В данный момент мы все еще возвращаем `500 Internal Server Error`. Мы можем настроить код состояния HTTP, добавив поле `: plug_status` к нашему исключению. Откройте `lib/example/plug/verify_request.ex` и добавьте следующее:
 
 ```elixir
 defmodule IncompleteRequestError do
